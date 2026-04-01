@@ -165,7 +165,7 @@ num_gpus = 32
 batch_size = 32
 num_iters_per_epoch = 234769 // (num_gpus * batch_size)
 num_epochs = 10
-llm_path = './Bench2DriveZoo/ckpts/llava-qwen2-0.5b'
+llm_path = '/home/czf/workspace/MindDrive/ckpts/llava-qwen2-0.5b'
 
 use_gen_token = True
 collect_keys = ['lidar2img', 'cam_intrinsic', 'timestamp', 'ego_pose', 'ego_pose_inv', 'command']
@@ -380,10 +380,10 @@ model = dict(
 dataset_type = "B2D_minddrive_Dataset"
 dataset_type_rollout = "RL_minddrive_Dataset"
 
-data_root = "data/bench2drive"
-info_root = "data/infos"
-map_root = "data/bench2drive/maps"
-map_file = "data/infos/b2d_map_infos.pkl"
+data_root = "/home/czf/Disk/Bench2Drive"
+info_root = "/home/czf/Disk/CZF/Bench2DriveZoo/data/infos"
+map_root = "/home/czf/Disk/Bench2Drive-Map"
+map_file = "/home/czf/Disk/CZF/Bench2DriveZoo/data/infos/b2d_map_infos.pkl"
 
 file_client_args = dict(backend="disk")
 ann_file_train=info_root + f"/b2d_infos_train.pkl"
