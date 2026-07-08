@@ -1,5 +1,5 @@
 <div align="center">
-<h3> MindDrive: A Vision-Language-Action Model for Autonomous Driving Utilizing Language as Action in Online Reinforcement Learning </h3>
+<h3> [🎉ECCV 26] MindDrive: A Vision-Language-Action Model for Autonomous Driving Utilizing Language as Action in Online Reinforcement Learning </h3>
 
 Haoyu Fu<sup>1\*</sup>, Diankun Zhang<sup>2\*</sup>, Zongchuang Zhao<sup>1</sup>, <br>Jianfeng Cui<sup>2</sup>, Hongwei Xie<sup>2†</sup>,  Bing Wang<sup>2</sup>, Guang Chen<sup>2</sup>, Dingkang Liang<sup>1†</sup>, Xiang Bai<sup>1</sup>
 
@@ -23,6 +23,7 @@ Current Vision-Language-Action (VLA) paradigms in autonomous driving primarily r
 </div>
 
 ## News
+`[2026/06/20]` Mindrive is accepted by ECCV 2026🎉🎉🎉!
 
 `[2026/03/19]` We are launching the MindDrive 3B model, which achieves 80.59 DS and 55.09 SR. Code and weights are now available.
 
@@ -127,11 +128,11 @@ This project uses the following external resources:
 If this work is helpful for your research, please consider citing:
 
 ```
-@article{fu2025minddrive,
+@inproceedings{fu2025minddrive,
   title={MindDrive: A Vision-Language-Action Model for Autonomous Driving via Online Reinforcement Learning},
-  author={Haoyu Fu and Diankun Zhang and Zongchuang Zhao and Jianfeng Cui and Hongwei Xie and Bing Wang and Guang Chen and Dingkang Liang and Xiang Bai},
-  journal={arXiv Preprint arXiv:2512.13636},  
-  year={2025},
+  author={Fu, Haoyu and Zhang, Diankun and Zhao, Zongchuang and Cui, Jianfeng and Xie, Hongwei and Wang, Bing and Chen, Guang and Liang, Dingkang and Bai, Xiang},
+  booktitle={Proceedings of the European Conference on Computer Vision},
+  year={2026}
 }
 ```
 ```
