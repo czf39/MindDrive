@@ -30,9 +30,177 @@ from pyquaternion import Quaternion
 from scipy.optimize import fsolve
 SAVE_PATH = os.environ.get('SAVE_PATH', None)
 IS_BENCH2DRIVE = os.environ.get('IS_BENCH2DRIVE', None)
+MINDDRIVE_DETECTION_CLASS_NAMES = [
+    'car', 'van', 'truck', 'bicycle', 'traffic_sign', 'traffic_cone',
+    'traffic_light', 'pedestrian', 'others'
+]
+MINDDRIVE_MAP_CLASS_NAMES = ['Broken', 'Solid', 'SolidSolid', 'Center', 'TrafficLight', 'StopSign']
+MINDDRIVE_LIDAR2EGO = np.array([
+    [0.0, 1.0, 0.0, -0.39],
+    [-1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 1.84],
+    [0.0, 0.0, 0.0, 1.0],
+], dtype=np.float32)
+MINDDRIVE_BOX_FORWARD_OFFSET_M = -0.39
 
 def get_entry_point():
     return 'MinddriveAgent'
+
+def _json_scalar(value):
+    if torch.is_tensor(value):
+        if value.numel() == 0:
+            return None
+        value = value.detach().cpu().reshape(-1)[0].item()
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+def _json_list(value):
+    if value is None:
+        return None
+    if torch.is_tensor(value):
+        value = value.detach().cpu().numpy()
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_json_list(item) for item in value]
+    return _json_scalar(value)
+
+def _box_tensor(boxes_3d):
+    if boxes_3d is None:
+        return None
+    tensor = getattr(boxes_3d, 'tensor', boxes_3d)
+    return tensor.detach().cpu().numpy() if torch.is_tensor(tensor) else np.asarray(tensor)
+
+def _box_centers(boxes_3d):
+    if boxes_3d is None:
+        return None
+    center = getattr(boxes_3d, 'center', None)
+    if center is None:
+        tensor = _box_tensor(boxes_3d)
+        return tensor[:, :3] if tensor is not None and tensor.ndim == 2 and tensor.shape[1] >= 3 else None
+    return center.detach().cpu().numpy() if torch.is_tensor(center) else np.asarray(center)
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+def _center_box_to_forward_right(center_3d):
+    if center_3d is None or len(center_3d) < 2:
+        return None
+    try:
+        box_x = float(center_3d[0])
+        box_y = float(center_3d[1])
+    except (TypeError, ValueError):
+        return None
+    return [box_y + MINDDRIVE_BOX_FORWARD_OFFSET_M, box_x]
+
+def _serialize_minddrive_perception(pts_bbox):
+    if not isinstance(pts_bbox, dict):
+        return {"available": False, "objects": [], "maps": []}
+    has_detection_fields = any(key in pts_bbox for key in ('boxes_3d', 'scores_3d', 'labels_3d'))
+    if not has_detection_fields:
+        return {"available": False, "objects": [], "maps": []}
+
+    boxes = _box_tensor(pts_bbox.get('boxes_3d'))
+    centers = _box_centers(pts_bbox.get('boxes_3d'))
+    scores = _json_list(pts_bbox.get('scores_3d')) or []
+    labels = _json_list(pts_bbox.get('labels_3d')) or []
+    raw_trajs = _json_list(pts_bbox.get('trajs_3d')) or []
+    score_threshold = _env_float("MINDDRIVE_PERCEPTION_SCORE_THRESHOLD", 0.05)
+    top_k = max(0, _env_int("MINDDRIVE_PERCEPTION_TOPK", 80))
+    save_traj = _env_flag("MINDDRIVE_PERCEPTION_SAVE_TRAJ", False)
+    count = len(labels)
+    scored_indices = []
+    for index in range(count):
+        score = float(scores[index]) if index < len(scores) and scores[index] is not None else None
+        if score is None or score >= score_threshold:
+            scored_indices.append((score if score is not None else float("-inf"), index))
+    scored_indices.sort(key=lambda item: item[0], reverse=True)
+    selected_indices = [index for _, index in scored_indices[:top_k]] if top_k > 0 else [index for _, index in scored_indices]
+
+    selected_boxes = []
+    selected_scores = []
+    selected_labels = []
+    selected_trajs = []
+    objects = []
+    for index in selected_indices:
+        label = int(labels[index]) if labels[index] is not None else None
+        score = float(scores[index]) if index < len(scores) and scores[index] is not None else None
+        box_3d = _json_list(boxes[index]) if boxes is not None and index < len(boxes) else None
+        center_3d = _json_list(centers[index]) if centers is not None and index < len(centers) else None
+        center_box_xy = center_3d[:2] if isinstance(center_3d, list) and len(center_3d) >= 2 else None
+        center_forward_right = _center_box_to_forward_right(center_3d)
+        traj_3d = raw_trajs[index] if save_traj and index < len(raw_trajs) else None
+        selected_boxes.append(box_3d)
+        selected_scores.append(score)
+        selected_labels.append(label)
+        if save_traj:
+            selected_trajs.append(traj_3d)
+        objects.append({
+            "index": index,
+            "label": label,
+            "label_name": MINDDRIVE_DETECTION_CLASS_NAMES[label] if label is not None and 0 <= label < len(MINDDRIVE_DETECTION_CLASS_NAMES) else None,
+            "score": score,
+            "box_3d": box_3d,
+            "center_3d": center_3d,
+            "center_box_xy": center_box_xy,
+            "center_forward_right_m": center_forward_right,
+        })
+        if save_traj:
+            objects[-1]["traj_3d"] = traj_3d
+
+    map_scores = _json_list(pts_bbox.get('map_scores_3d')) or []
+    map_labels = _json_list(pts_bbox.get('map_labels_3d')) or []
+    map_points = _json_list(pts_bbox.get('map_pts_3d')) or []
+    maps = []
+    for index, label_value in enumerate(map_labels):
+        label = int(label_value) if label_value is not None else None
+        maps.append({
+            "index": index,
+            "label": label,
+            "label_name": MINDDRIVE_MAP_CLASS_NAMES[label] if label is not None and 0 <= label < len(MINDDRIVE_MAP_CLASS_NAMES) else None,
+            "score": float(map_scores[index]) if index < len(map_scores) and map_scores[index] is not None else None,
+            "points": map_points[index] if index < len(map_points) else None,
+        })
+
+    return {
+        "available": True,
+        "coordinate": "boxes_3d are MindDrive decoded box-frame [x,y,z,dx,dy,dz,yaw,...]; center_forward_right_m=[box_y-0.39,box_x], matching Stage1 relative_position_xy [forward,right]",
+        "box_to_ego_forward_right": {"forward": "box_y - 0.39", "right": "box_x"},
+        "center_coordinate": "ego_forward_right_from_minddrive_box_frame",
+        "raw_object_count": count,
+        "object_count": len(objects),
+        "map_count": len(maps),
+        "score_threshold": score_threshold,
+        "top_k": top_k,
+        "save_traj": save_traj,
+        "boxes_3d": selected_boxes,
+        "scores_3d": selected_scores,
+        "labels_3d": selected_labels,
+        "trajs_3d": selected_trajs if save_traj else [],
+        "map_scores_3d": map_scores,
+        "map_labels_3d": map_labels,
+        "map_pts_3d": map_points,
+        "objects": objects,
+        "maps": maps,
+    }
 
 class MinddriveAgent(autonomous_agent.AutonomousAgent):
 
@@ -165,10 +333,7 @@ class MinddriveAgent(autonomous_agent.AutonomousAgent):
                                   [ 0.93969262, -0.34202014 ,  0.  , -0.49288953],
                                   [ 0.        ,  0.         ,  0.  ,  1.        ]])
         }
-        self.lidar2ego = np.array([[ 0. ,  1. ,  0. , -0.39],
-                                   [-1. ,  0. ,  0. ,  0.  ],
-                                   [ 0. ,  0. ,  1. ,  1.84],
-                                   [ 0. ,  0. ,  0. ,  1.  ]])
+        self.lidar2ego = MINDDRIVE_LIDAR2EGO.copy()
         
         topdown_extrinsics =  np.array([[0.0, -0.0, -1.0, 50.0], [0.0, 1.0, -0.0, 0.0], [1.0, -0.0, 0.0, -0.0], [0.0, 0.0, 0.0, 1.0]])
         unreal2cam = np.array([[0,1,0,0], [0,0,-1,0], [1,0,0,0], [0,0,0,1]])
@@ -405,8 +570,11 @@ class MinddriveAgent(autonomous_agent.AutonomousAgent):
                     
         custom_wrap_fp16_model(self.model)
         output_data_batch = self.model(input_data_batch, return_loss=False)
-        out_truck = output_data_batch[0]['pts_bbox']['ego_fut_preds'].cpu().numpy()
-        out_truck_path = output_data_batch[0]['pts_bbox']['pw_ego_fut_pred'].cpu().numpy()
+        pts_bbox = output_data_batch[0]['pts_bbox']
+        minddrive_perception = _serialize_minddrive_perception(pts_bbox)
+        pts_bbox['minddrive_perception'] = minddrive_perception
+        out_truck = pts_bbox['ego_fut_preds'].cpu().numpy()
+        out_truck_path = pts_bbox['pw_ego_fut_pred'].cpu().numpy()
         steer_traj, throttle_traj, brake_traj, metadata_traj = self.pidcontroller.control_pid(out_truck_path,out_truck, tick_data['speed'], local_command_xy)
         if brake_traj < 0.05: brake_traj = 0.0
         if throttle_traj > brake_traj: brake_traj = 0.0
@@ -428,6 +596,15 @@ class MinddriveAgent(autonomous_agent.AutonomousAgent):
         self.pid_metadata['command'] = command
         self.pid_metadata['command_near_xy'] = command_near_xy.tolist()
         self.pid_metadata['local_command_xy '] = local_command_xy.tolist()
+        self.pid_metadata['model_raw'] = {
+            "result": {
+                "pts_bbox": {
+                    "ego_fut_preds": out_truck.tolist(),
+                    "pw_ego_fut_pred": out_truck_path.tolist(),
+                    "minddrive_perception": minddrive_perception,
+                }
+            }
+        }
         metric_info = self.get_metric_info()
         self.metric_info[self.step] = metric_info     
         if SAVE_PATH is not None and self.step % 10 == 0:
